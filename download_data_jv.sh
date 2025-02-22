@@ -17,7 +17,7 @@ fi
 # 2. Download and Unpack asr_sundanese files
 
 # Base URL of the zip files
-BASE_URL="https://www.openslr.org/resources/36/asr_javanese_"
+BASE_URL="https://www.openslr.org/resources/35/asr_javanese_"
 FILE_EXTENSION=".zip"
 
 # Output directory for the ZIP files (create it if it doesn't exist)
@@ -30,10 +30,12 @@ mkdir -p "$UNPACKED_DIR"
 
 
 # Loop through the zip files (0 to f)
-for i in {0..f}; do
-  FILE_NUMBER=$(printf "%x" $i)
-  FILE_URL="$BASE_URL${FILE_NUMBER}${FILE_EXTENSION}"
-  OUTPUT_FILENAME="$OUTPUT_DIR/asr_sundanese_${FILE_NUMBER}${FILE_EXTENSION}"
+# Use brace expansion with explicit numbers and letters
+for i in {0,1,2,3,4,5,6,7,8,9,a,b,c,d,e,f}; do
+  # FILE_NUMBER=$(printf "%x" $i) # No longer needed
+
+  FILE_URL="$BASE_URL${i}${FILE_EXTENSION}"
+  OUTPUT_FILENAME="$OUTPUT_DIR/asr_javanese_${i}${FILE_EXTENSION}"
 
   # Download the ZIP file
   wget -O "$OUTPUT_FILENAME" "$FILE_URL"
