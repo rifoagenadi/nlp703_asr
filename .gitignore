@@ -169,3 +169,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# data folder
+sundanese_zips
+sundanse_data
+javanese_zips
+javanese_data
