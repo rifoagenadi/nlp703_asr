@@ -34,7 +34,7 @@ model.eval()
 # Load data
 from sklearn.model_selection import train_test_split
 if args.num_samples:
-    data = load_data(num_samples=args.num_samples, random_state=1312)
+    data = load_data(num_samples=args.num_samples)
     _, data = train_test_split(data, test_size=0.2, random_state=1312) 
     print("Num Test Data: ", data.shape[0])
 else:

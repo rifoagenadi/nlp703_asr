@@ -4,7 +4,7 @@ import re
 
 def load_data(num_samples=None):
     data = pd.read_csv('utt_spk_text.tsv', sep='\t', header=None)
-    return data.sample(num_samples, random_state=1213) if num_samples else data
+    return data.sample(num_samples, random_state=1312) if num_samples else data
 
 from jiwer import wer
 
