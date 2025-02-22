@@ -113,4 +113,4 @@ for i in tqdm(range(0, num_files, batch_size)):
 # print("Predictions:", predictions)
 # print("Labels:", labels)
 wer = calculate_wer(predictions, labels)
-print("WER:", wer)
+print("WER:", wer*100)
