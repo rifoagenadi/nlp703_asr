@@ -8,7 +8,7 @@ import os
 # Set up argument parser
 parser = argparse.ArgumentParser(description="Transcribe audio using a Whisper model.")
 parser.add_argument("--model_name", type=str, default="openai/whisper-base", help="Name of the Whisper model to use")
-parser.add_argument("--num_samples", type=int, default=20, help="Number of samples to transcribe")
+parser.add_argument("--num_samples", type=int, default=None, help="Number of samples to transcribe")
 parser.add_argument("--language", type=str, default='su', help="Language code (su: Sundanese, jv: Javanese)")
 parser.add_argument("--batch_size", type=int, default=32, help="Batch size for inference")
 args = parser.parse_args()
@@ -32,7 +32,10 @@ model = model.to(device)
 model.eval()
 
 # Load data
-data = load_data(num_samples=args.num_samples)
+if args.num_samples:
+    data = load_data(num_samples=args.num_samples)
+else:
+    data = load_data()
 file_names = data[0].tolist()
 labels = data[2].tolist()
 
