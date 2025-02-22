@@ -8,17 +8,6 @@ def load_data(num_samples=None):
 
 from jiwer import wer
 
-hypotheses = [
-    "hello world",
-    "this is a test",
-    "the quick brown fox jumps over the lazy dog",
-]
-references = [
-    "hello world",
-    "this is test",  # Missing "a"
-    "the quick brown fox jumped over lazy dog",  # "jumped" instead of "jumps", missing "the"
-]
-
 def calculate_wer(hypotheses, references):
     """
     Calculates Word Error Rate (WER) from hypothesis and reference text files.

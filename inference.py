@@ -35,7 +35,9 @@ model.eval()
 if args.num_samples:
     data = load_data(num_samples=args.num_samples)
 else:
+    from sklearn.model_selection import train_test_split
     data = load_data()
+    _, data = train_test_split(data, test_size=0.2, random_state=1312) 
 file_names = data[0].tolist()
 labels = data[2].tolist()
 
@@ -106,7 +108,7 @@ for i in tqdm(range(0, num_files, batch_size)):
         predictions.extend(transcriptions)
 
 # Calculate and print results
-print("Predictions:", predictions)
-print("Labels:", labels)
+# print("Predictions:", predictions)
+# print("Labels:", labels)
 wer = calculate_wer(predictions, labels)
 print("WER:", wer)
