@@ -37,31 +37,31 @@ for i in {0,1,2,3,4,5,6,7,8,9,a,b,c,d,e,f}; do
   FILE_URL="$BASE_URL${i}${FILE_EXTENSION}"
   OUTPUT_FILENAME="$OUTPUT_DIR/asr_javanese_${i}${FILE_EXTENSION}"
 
-  # Download the ZIP file
-  wget -O "$OUTPUT_FILENAME" "$FILE_URL"
-
-  if [ $? -eq 0 ]; then
-    echo "File '$OUTPUT_FILENAME' downloaded successfully."
-
-    # Unzip the file into the unpacked data directory
-    unzip -d "$UNPACKED_DIR" "$OUTPUT_FILENAME"
-
+  # Check if the file already exists before downloading
+  if [ ! -f "$OUTPUT_FILENAME" ]; then
+    wget -O "$OUTPUT_FILENAME" "$FILE_URL"
     if [ $? -eq 0 ]; then
-      echo "File '$OUTPUT_FILENAME' unpacked successfully to '$UNPACKED_DIR'."
-
-      # OPTIONAL:  Remove the zip file after successful extraction
-      # rm "$OUTPUT_FILENAME"
+      echo "File '$OUTPUT_FILENAME' downloaded successfully."
     else
-      echo "Error: Failed to unpack file '$OUTPUT_FILENAME'."
-      # Consider exiting or continuing (exiting is safer)
+      echo "Error: Failed to download file from '$FILE_URL'."
       exit 1
     fi
   else
-    echo "Error: Failed to download file from '$FILE_URL'."
-    # Consider exiting or continuing (exiting is safer)
+    echo "File '$OUTPUT_FILENAME' already exists, skipping download."
+  fi
+
+  # Unzip with overwrite option (-o)
+  unzip -o -d "$UNPACKED_DIR" "$OUTPUT_FILENAME"
+  if [ $? -eq 0 ]; then
+    echo "File '$OUTPUT_FILENAME' unpacked successfully to '$UNPACKED_DIR'."
+  else
+    echo "Error: Failed to unpack file '$OUTPUT_FILENAME'."
     exit 1
   fi
+
+  # OPTIONAL: Remove the zip file after extraction
+  # rm "$OUTPUT_FILENAME"
 done
 
-echo "All files downloaded and (attempted to be) unpacked."
+echo "All files downloaded and unpacked successfully."
 exit 0
