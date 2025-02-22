@@ -171,7 +171,8 @@ cython_debug/
 .pypirc
 
 # data folder
-sundanese_zips
-sundanse_data
-javanese_zips
-javanese_data
+sundanese_zips/
+sundanese_data/
+javanese_zips/
+javanese_data/
+utt_spk_text.tsv
