@@ -16,6 +16,7 @@ from transformers import (
     TrainerState,
     TrainerControl
 )
+import evaluate
 from peft import PeftModel, PeftConfig
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
@@ -23,6 +24,10 @@ import evaluate
 from peft import prepare_model_for_kbit_training
 from peft import LoraConfig, PeftModel, LoraModel, get_peft_model
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+import numpy as np
+import gc
 
 parser = argparse.ArgumentParser(description="Fine-tune Whisper ASR model on Javanese/Sundanese")
 parser.add_argument("--peft_model_path", type=str, help="Saved PEFT path")
@@ -35,25 +40,7 @@ args = parser.parse_args()
 
 # args --> peft_model_path "test-openai-whisper-tiny-LORA"
 # args --> model_id "openai/whisper-tiny"
-peft_model_id = args.peft_model_path
-peft_config = PeftConfig.from_pretrained(peft_model_id)
 
-base_model = WhisperForConditionalGeneration.from_pretrained(args.model_id)  
-model = PeftModel.from_pretrained(base_model, peft_model_id)
-feature_extractor = WhisperFeatureExtractor.from_pretrained(args.model_id)
-tokenizer = WhisperTokenizer.from_pretrained(args.model_id, language=args.language, task=args.task_type)
-processor = WhisperProcessor.from_pretrained(args.model_id, language=args.language, task=args.task_type)
-
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-import numpy as np
-import gc
-
-# Ensure the model is on GPU
-model = model.to("cuda")  # ✅ Move entire model to CUDA
-model_dtype = next(model.parameters()).dtype  # Get model dtype
-
-# Set language-specific parameters
 if args.language == "jv":
     audio_dir = "javanese_data"
     language = "javanese"
@@ -62,6 +49,18 @@ elif args.language == "su":
     language = "sundanese"
 else:
     raise ValueError("Invalid language choice. Use 'jv' or 'su'.")
+
+peft_model_id = args.peft_model_path
+peft_config = PeftConfig.from_pretrained(peft_model_id)
+
+base_model = WhisperForConditionalGeneration.from_pretrained(args.model_id)  
+model = PeftModel.from_pretrained(base_model, peft_model_id)
+model = model.to("cuda")  # ✅ Move entire model to CUDA
+model_dtype = next(model.parameters()).dtype  # Get model dtype
+
+feature_extractor = WhisperFeatureExtractor.from_pretrained(args.model_id)
+tokenizer = WhisperTokenizer.from_pretrained(args.model_id, language=language, task=args.task_type)
+processor = WhisperProcessor.from_pretrained(args.model_id, language=language, task=args.task_type)
 
 # Ensure LoRA layers are on GPU (sometimes required)
 if hasattr(model, "base_model"):
@@ -152,7 +151,7 @@ test_dataset = dataset["test"]
 eval_dataloader = DataLoader(test_dataset, batch_size=16, collate_fn=data_collator)
 
 model.eval()
-import evaluate
+
 metric = evaluate.load("wer")
 for step, batch in enumerate(tqdm(eval_dataloader)):
     with torch.no_grad():  # No need for autocast since Whisper already handles mixed precision
