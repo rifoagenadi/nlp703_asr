@@ -172,7 +172,7 @@ model.print_trainable_parameters()
 training_args = Seq2SeqTrainingArguments(
     output_dir=args.output_dir,  # change to a repo name of your choice
     per_device_train_batch_size=4,
-    gradient_accumulation_steps=4,  # increase by 2x for every 2x decrease in batch size
+    gradient_accumulation_steps=2,  # increase by 2x for every 2x decrease in batch size
     learning_rate=1e-3,
     warmup_steps=50,
     num_train_epochs=args.num_epochs,
@@ -212,7 +212,7 @@ trainer = Seq2SeqTrainer(
     train_dataset=train_dataset,
     eval_dataset=test_dataset,
     data_collator=data_collator,
-    compute_metrics=compute_metrics,
+    # compute_metrics=compute_metrics,
     tokenizer=processor.feature_extractor,
     callbacks=[SavePeftModelCallback],
 )
@@ -221,7 +221,20 @@ model.config.use_cache = False
 
 trainer.train()
 
-peft_model_id = "fine_tuned_lora/" + f"{model_id}-{model.peft_config.peft_type}".replace("/", "-")
-os.makedirs(peft_model_id, exist_ok=True)  # Ensure folder exists
+model = get_peft_model(model, config)
+# print(model)
+print("Model ID:", model_id) 
+print("model peft config:", model.peft_config)
+print("model peft config type: ", model.peft_config["default"].peft_type.value)  # Should print "LORA"
+
+if isinstance(model.peft_config, dict) and "default" in model.peft_config:
+    peft_type = model.peft_config["default"].peft_type.value 
+else:
+    peft_type = "lora" 
+
+peft_model_id = f"finetuned-lora/{model_id}-{peft_type}".replace("/", "-")
+print("peft model id:", peft_model_id) 
+
+model.save_pretrained(peft_model_id)
 
 print(f"Model will be saved at: {peft_model_id}")
