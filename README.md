@@ -11,17 +11,37 @@ The audio files for crowd noise can be downloaded here:
 
 
 ## How to Run the Evaluation Script
-There are two ways to run the evaluation on the regular dataset
-```python evaluation.py --peft_model_path <checkpoint_path> --model_id <model_id> --dataset_name <hf_dataset_id> --language <lang>``` or 
-```python evaluation_withnoise.py --peft_model_path <checkpoint_path> --model_id <model_id> --dataset_name <hf_dataset_id> --language <lang>```
 
+There are two ways to run the evaluation on the regular dataset:
 
-To run the evaluation on noisy set:
-- Test on data with random white noise 
-```python evaluation_withnoise.py --peft_model_path <checkpoint_path> --model_id <model_id> --dataset_name <hf_dataset_id> --language <lang> --add_noise --noise_min <noise_min> --noise_max <noise_max>```
-- Test on data with other kind of noise, specify the directory containing the noisy audio files 
-```python evaluation.py --peft_model_path <checkpoint_path> --model_id <model_id> --dataset_name <hf_dataset_id> --language <lang> --add_noise --noise_dir <noise_dir> --noise_min <noise_min> --noise_max <noise_max>```
+```python
+# Standard evaluation
+python evaluation.py --peft_model_path <checkpoint_path> --model_id <model_id> --dataset_name <hf_dataset_id> --language <lang>
+```
 
-- language is either `su` or `jv`
-- the regular dataset `hf_dataset_id` is one of `["irasalsabila/sundanese_asr_dataset_20k", "irasalsabila/sundanese_asr_dataset_20k"]`
+```python
+# Alternative evaluation script
+python evaluation_withnoise.py --peft_model_path <checkpoint_path> --model_id <model_id> --dataset_name <hf_dataset_id> --language <lang>
+```
+
+## Testing with Noise
+
+To run the evaluation on noisy data:
+
+### Test with random white noise
+```python
+python evaluation_withnoise.py --peft_model_path <checkpoint_path> --model_id <model_id> --dataset_name <hf_dataset_id> --language <lang> --add_noise --noise_min <noise_min> --noise_max <noise_max>
+```
+
+### Test with other kinds of noise
+Specify the directory containing the noisy audio files:
+```python
+python evaluation.py --peft_model_path <checkpoint_path> --model_id <model_id> --dataset_name <hf_dataset_id> --language <lang> --add_noise --noise_dir <noise_dir> --noise_min <noise_min> --noise_max <noise_max>
+```
+
+## Parameters
+
+- `language`: either `su` (Sundanese) or `jv` (Javanese)
+- `hf_dataset_id`: one of `["irasalsabila/sundanese_asr_dataset_20k", "irasalsabila/sundanese_asr_dataset_20k"]`
 - `checkpoint_path` example: `"saved_models/whisper-tiny-su/whisper-tiny-sundanese/checkpoint-1250"`
+- `noise_min` and `noise_max`: control the range of random noise levels (between 0.0 and 1.0)
