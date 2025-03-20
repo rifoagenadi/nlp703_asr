@@ -42,13 +42,12 @@ args = parser.parse_args()
 # args --> model_id "openai/whisper-tiny"
 
 if args.language == "jv":
-    audio_dir = "javanese_data"
     language = "javanese"
 elif args.language == "su":
-    audio_dir = "sundanese_data"
     language = "sundanese"
 else:
     raise ValueError("Invalid language choice. Use 'jv' or 'su'.")
+
 
 peft_model_id = args.peft_model_path
 peft_config = PeftConfig.from_pretrained(peft_model_id)

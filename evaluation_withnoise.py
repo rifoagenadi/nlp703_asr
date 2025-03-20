@@ -6,6 +6,7 @@ import random
 import numpy as np
 import soundfile as sf
 from datasets import load_dataset
+from scipy.io import wavfile
 from transformers import (
     WhisperProcessor,
     WhisperForConditionalGeneration,
@@ -19,14 +20,11 @@ from transformers import (
     TrainerState,
     TrainerControl
 )
-import evaluate
-from peft import PeftModel, PeftConfig
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 import evaluate
 from peft import prepare_model_for_kbit_training
-from peft import LoraConfig, PeftModel, LoraModel, get_peft_model
-from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from peft import LoraConfig, PeftModel, LoraModel, get_peft_model, PeftConfig
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
@@ -48,7 +46,8 @@ parser.add_argument("--language", type=str, choices=["jv", "su"], required=True,
 parser.add_argument("--task_type", type=str, default="transcribe", help="Task type: transcribe or translate")
 parser.add_argument("--noise_dir", type=str, help="Directory containing noise files (.wav)")
 parser.add_argument("--add_noise", action="store_true", help="Add noise to audio files during evaluation")
-parser.add_argument("--noise_level", type=float, default=1.0, help="Scaling factor for noise (0.0-1.0)")
+parser.add_argument("--noise_min", type=float, default=0.1, help="Minimum noise level (0.0-1.0)")
+parser.add_argument("--noise_max", type=float, default=0.5, help="Maximum noise level (0.0-1.0)")
 
 args = parser.parse_args()
 
@@ -97,15 +96,50 @@ def convert_wav_to_numpy(wav_path):
     data, samplerate = sf.read(wav_path)
     return data, samplerate
 
-def add_noise_to_numpy(audio_data, sample_rate, noise_directory, noise_level=1.0):
+def add_white_noise(audio_data, noise_factor=0.05):
     """
-    Add noise to an audio numpy array.
+    Add white noise to an audio array.
+    
+    Parameters:
+    -----------
+    audio_data : numpy.ndarray
+        Audio data as numpy array.
+    noise_factor : float, optional
+        Intensity of the noise to be added. Default is 0.05 (5%).
+        Higher values result in more noise.
+    
+    Returns:
+    --------
+    numpy.ndarray: Audio with added noise
+    """
+    try:
+        # Generate noise with the same shape as the audio data
+        noise = np.random.normal(0, 1, audio_data.shape)
+        
+        # Normalize noise to match the range of data
+        noise = noise / np.max(np.abs(noise))
+        
+        # Add noise to the audio data
+        noisy_data = audio_data + noise_factor * noise
+        
+        # Clip to ensure data stays in valid range [-1, 1]
+        noisy_data = np.clip(noisy_data, -1.0, 1.0)
+        
+        return noisy_data
+    except Exception as e:
+        print(f"Error adding white noise: {e}")
+        return audio_data
+
+def add_noise_to_numpy(audio_data, sample_rate, noise_directory, noise_min=0.1, noise_max=0.5):
+    """
+    Add noise to an audio numpy array with random noise level for each segment.
     
     Args:
         audio_data: Numpy array of audio data
         sample_rate: Sample rate of the audio
         noise_directory: Directory containing noise files (WAV)
-        noise_level: Scaling factor for noise (0.0-1.0)
+        noise_min: Minimum scaling factor for noise (0.0-1.0)
+        noise_max: Maximum scaling factor for noise (0.0-1.0)
         
     Returns:
         numpy.ndarray: Noisy audio data
@@ -136,6 +170,9 @@ def add_noise_to_numpy(audio_data, sample_rate, noise_directory, noise_level=1.0
         # Randomly select a noise file
         noise_file = random.choice(noise_files)
         
+        # Generate a random noise level for this segment
+        random_noise_level = random.uniform(noise_min, noise_max)
+        
         # Read the noise file
         noise_segment, noise_sample_rate = convert_wav_to_numpy(noise_file)
         
@@ -159,28 +196,42 @@ def add_noise_to_numpy(audio_data, sample_rate, noise_directory, noise_level=1.0
         if len(audio_data.shape) > 1 and len(noise_segment.shape) == 1:
             noise_segment = np.column_stack([noise_segment] * audio_data.shape[1])
         
-        # Add the noise segment to the corresponding part of the noise data (scaled by noise_level)
-        noise_data[start_idx:end_idx] = noise_segment * noise_level
+        # Add the noise segment to the corresponding part of the noise data (scaled by random_noise_level)
+        noise_data[start_idx:end_idx] = noise_segment * random_noise_level
     
     # Add the noise to the original audio
     noisy_audio = audio_data + noise_data
     
+    # Clip to avoid overflow
+    noisy_audio = np.clip(noisy_audio, -1.0, 1.0)
+    
     return noisy_audio
 
-def load_audio(file_name, add_noise=False, noise_dir=None, noise_level=1.0):
+def load_audio(file_name, add_noise=False, noise_dir=None, noise_min=0.1, noise_max=0.5):
     file_path = os.path.join(audio_dir, file_name + ".flac")
     try:
         if add_noise and noise_dir:
             # For noise addition, use soundfile to read the audio first
             audio_data, sr = sf.read(file_path)
             
-            # Add noise to the numpy array
-            noisy_audio = add_noise_to_numpy(audio_data, sr, noise_dir, noise_level)
+            # Add noise to the numpy array with random noise level
+            noisy_audio = add_noise_to_numpy(audio_data, sr, noise_dir, noise_min, noise_max)
             
             # Convert numpy array back to torch tensor
             speech = torch.tensor(noisy_audio)
             
             # Check if we need to convert sample rate to 16kHz
+            if sr != 16000:
+                resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16000)
+                speech = resampler(speech.unsqueeze(0)).squeeze(0)
+        elif add_noise and not noise_dir:
+            audio_data, sr = sf.read(file_path)
+            
+            # Add white noise with random noise level
+            random_noise_level = random.uniform(noise_min, noise_max)
+            noisy_audio = add_white_noise(audio_data, random_noise_level)
+            
+            speech = torch.tensor(noisy_audio)
             if sr != 16000:
                 resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16000)
                 speech = resampler(speech.unsqueeze(0)).squeeze(0)
@@ -210,7 +261,8 @@ class DataCollatorSpeechSeq2SeqWithPadding:
     decoder_start_token_id: int
     add_noise: bool
     noise_dir: str
-    noise_level: float
+    noise_min: float
+    noise_max: float
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
         speeches = []
@@ -223,7 +275,8 @@ class DataCollatorSpeechSeq2SeqWithPadding:
                 feature["filename"], 
                 add_noise=self.add_noise, 
                 noise_dir=self.noise_dir,
-                noise_level=self.noise_level
+                noise_min=self.noise_min,
+                noise_max=self.noise_max
             )
             if speech is not None:
                 speeches.append(speech)
@@ -269,7 +322,8 @@ data_collator = DataCollatorSpeechSeq2SeqWithPadding(
     decoder_start_token_id=tokenizer.bos_token_id,
     add_noise=args.add_noise,
     noise_dir=args.noise_dir,
-    noise_level=args.noise_level
+    noise_min=args.noise_min,
+    noise_max=args.noise_max
 )
 
 # Load dataset
@@ -284,7 +338,7 @@ model.eval()
 metric = evaluate.load("wer")
 print(f"Starting evaluation {'with' if args.add_noise else 'without'} noise addition.")
 if args.add_noise:
-    print(f"Using noise from {args.noise_dir} with level {args.noise_level}")
+    print(f"Using noise from {args.noise_dir} with random noise level between {args.noise_min} and {args.noise_max}")
 
 # Run evaluation
 for step, batch in enumerate(tqdm(eval_dataloader)):
