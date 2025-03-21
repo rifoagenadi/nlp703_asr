@@ -176,3 +176,8 @@ sundanese_data/
 javanese_zips/
 javanese_data/
 utt_spk_text.tsv
+
+saved_models/
+saved_models_1/
+saved_models_2/
+vehicle_sounds/
