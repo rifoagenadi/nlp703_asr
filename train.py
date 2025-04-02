@@ -33,6 +33,13 @@ parser.add_argument("--task_type", type=str, default="transcribe", help="Task ty
 parser.add_argument("--output_dir", type=str, required=True, help="Output directory for fine-tuned model")
 parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs for training")
 parser.add_argument("--batch_size", type=int, default=16, help="Batch size per device for training")
+parser.add_argument("--use_specaugment", action="store_true", help="Whether to use SpecAugment data augmentation")
+parser.add_argument("--mask_time_prob", type=float, default=0.05, help="Probability of masking time steps")
+parser.add_argument("--mask_time_length", type=int, default=10, help="Length of time masking")
+parser.add_argument("--mask_feature_prob", type=float, default=0.0, help="Probability of masking features")
+parser.add_argument("--mask_feature_length", type=int, default=10, help="Length of feature masking")
+parser.add_argument("--mask_time_min_masks", type=int)
+parser.add_argument("--mask_feature_min_masks", type=int)
 args = parser.parse_args()
 
 # Set device (Use GPU if available)
@@ -176,6 +183,28 @@ quantization_config = BitsAndBytesConfig(
 model = WhisperForConditionalGeneration.from_pretrained(model_id, \
     quantization_config=quantization_config, device_map="auto")
 
+# Update SpecAugment parameters if enabled
+if args.use_specaugment:
+    print("Enabling SpecAugment with the following parameters:")
+    print(f"  mask_time_prob: {args.mask_time_prob}")
+    print(f"  mask_time_length: {args.mask_time_length}")
+    print(f"  mask_feature_prob: {args.mask_feature_prob}")
+    print(f"  mask_feature_length: {args.mask_feature_length}")
+    
+    # Update the model configuration with SpecAugment settings
+    model.config.apply_spec_augment = True
+    model.config.mask_time_prob = args.mask_time_prob
+    model.config.mask_time_length = args.mask_time_length
+    model.config.mask_feature_prob = args.mask_feature_prob
+    model.config.mask_feature_length = args.mask_feature_length
+    model.config.mask_feature_min_masks = args.mask_feature_min_masks
+    model.config.mask_time_min_masks = args.mask_time_min_masks
+    
+    # Print the updated config for verification
+    print(f"Updated model config: apply_spec_augment={model.config.apply_spec_augment}")
+else:
+    print("Training without SpecAugment")
+
 model.config.forced_decoder_ids = None
 model.config.suppress_tokens = []
 
@@ -190,8 +219,8 @@ model.print_trainable_parameters()
 
 training_args = Seq2SeqTrainingArguments(
     output_dir=args.output_dir,  # change to a repo name of your choice
-    per_device_train_batch_size=32,
-    gradient_accumulation_steps=2,  # increase by 2x for every 2x decrease in batch size
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=16,  # increase by 2x for every 2x decrease in batch size
     learning_rate=1e-5,
     warmup_steps=5,
     num_train_epochs=args.num_epochs,
@@ -252,7 +281,8 @@ if isinstance(model.peft_config, dict) and "default" in model.peft_config:
 else:
     peft_type = "lora" 
 
-peft_model_id = f"finetuned-lora/{model_id}-{peft_type}".replace("/", "-")
+augment_suffix = "-specaugment" if args.use_specaugment else ""
+peft_model_id = f"finetuned-lora/{model_id}-{peft_type}{augment_suffix}".replace("/", "-")
 print("peft model id:", peft_model_id) 
 
 model.save_pretrained(peft_model_id)
