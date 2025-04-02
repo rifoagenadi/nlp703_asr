@@ -1,12 +1,11 @@
 import os
 import torch
+from torch.utils.data import DataLoader
 import argparse
 import torchaudio
-import random
+from datasets import load_dataset
 import numpy as np
 import soundfile as sf
-from datasets import load_dataset
-from scipy.io import wavfile
 from transformers import (
     WhisperProcessor,
     WhisperForConditionalGeneration,
@@ -24,29 +23,27 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 import evaluate
 from peft import prepare_model_for_kbit_training
-from peft import LoraConfig, PeftModel, LoraModel, get_peft_model, PeftConfig
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-import numpy as np
-import gc
+from peft import LoraConfig, PeftModel, LoraModel, get_peft_model
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
-# Set random seed for reproducibility
-RANDOM_SEED = 42
-random.seed(RANDOM_SEED)
-np.random.seed(RANDOM_SEED)
-torch.manual_seed(RANDOM_SEED)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(RANDOM_SEED)
-
-parser = argparse.ArgumentParser(description="Fine-tune Whisper ASR model on Javanese/Sundanese with noise addition")
-parser.add_argument("--peft_model_path", type=str, help="Saved PEFT path", default=None)
-parser.add_argument("--model_id", type=str, default="openai/whisper-small", help="Whisper model name")
+# Parse arguments
+parser = argparse.ArgumentParser(description="Fine-tune Whisper ASR model on Javanese/Sundanese")
 parser.add_argument("--dataset_name", type=str, required=True, help="Hugging Face dataset name")
 parser.add_argument("--language", type=str, choices=["jv", "su"], required=True, help="Language (jv or su)")
+parser.add_argument("--model_name", type=str, default="openai/whisper-small", help="Whisper model name")
 parser.add_argument("--task_type", type=str, default="transcribe", help="Task type: transcribe or translate")
-parser.add_argument("--noise_dir", type=str, help="Directory containing noise files (.wav) or (.mp3)")
-parser.add_argument("--add_noise", action="store_true", help="Add noise to audio files during evaluation")
-parser.add_argument("--target_snr", type=float, default=None, help="Target signal-to-noise ratio (if None, random values between 5-20dB will be used)")
+parser.add_argument("--output_dir", type=str, required=True, help="Output directory for fine-tuned model")
+parser.add_argument("--num_epochs", type=int, default=5, help="Number of epochs for training")
+parser.add_argument("--batch_size", type=int, default=4, help="Batch size per device for training")
+parser.add_argument("--use_specaugment", action="store_true", help="Whether to use SpecAugment data augmentation")
+parser.add_argument("--mask_time_prob", type=float, default=0.05, help="Probability of masking time steps")
+parser.add_argument("--mask_time_length", type=int, default=10, help="Length of time masking")
+parser.add_argument("--mask_feature_prob", type=float, default=0.0, help="Probability of masking features")
+parser.add_argument("--mask_feature_length", type=int, default=10, help="Length of feature masking")
+parser.add_argument("--mask_time_min_masks", type=int)
+parser.add_argument("--mask_feature_min_masks", type=int)
+parser.add_argument("--add_noise", action="store_true", help="Add noise to audio files during evaluation", required=True)
+parser.add_argument("--noise_dir", type=str, help="Directory containing noise files (.wav) or (.mp3)", required=True)
 
 args = parser.parse_args()
 
@@ -56,10 +53,16 @@ if args.add_noise and not args.noise_dir:
 if args.noise_dir and not args.add_noise:
     parser.error("--noise_dir requires --add_noise to be specified")
 
-# If target_snr is provided but noise is not enabled, warn the user
-if args.target_snr is not None and not args.add_noise:
-    print("Warning: --target_snr is specified but --add_noise is not enabled. SNR value will be ignored.")
+# Set device (Use GPU if available)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
+# Load dataset from Hugging Face Hub
+dataset = load_dataset(args.dataset_name)
+train_dataset = dataset["train"]
+test_dataset = dataset["test"]
+
+# Set language-specific parameters
 if args.language == "jv":
     audio_dir = "javanese_data"
     language = "javanese"
@@ -69,30 +72,12 @@ elif args.language == "su":
 else:
     raise ValueError("Invalid language choice. Use 'jv' or 'su'.")
 
-#peft_model_id = args.peft_model_path
-#peft_config = PeftConfig.from_pretrained(peft_model_id)
+model_id = args.model_name
+feature_extractor = WhisperFeatureExtractor.from_pretrained(model_id)
+tokenizer = WhisperTokenizer.from_pretrained(model_id, language=args.language, task=args.task_type)
+processor = WhisperProcessor.from_pretrained(model_id, language=args.language, task=args.task_type)
 
-base_model = WhisperForConditionalGeneration.from_pretrained(args.model_id)
-
-# Conditionally apply PEFT if path is provided
-if args.peft_model_path:
-    peft_config = PeftConfig.from_pretrained(args.peft_model_path)
-    model = PeftModel.from_pretrained(base_model, args.peft_model_path)
-else:
-    model = base_model  # Use original weights
-
-model = model.to("cuda")
-model_dtype = next(model.parameters()).dtype
-
-feature_extractor = WhisperFeatureExtractor.from_pretrained(args.model_id)
-tokenizer = WhisperTokenizer.from_pretrained(args.model_id, language=args.language, task=args.task_type)
-processor = WhisperProcessor.from_pretrained(args.model_id, language=args.language, task=args.task_type)
-
-# Ensure LoRA layers are on GPU
-if hasattr(model, "base_model"):
-    model.base_model.to("cuda")
-
-MAX_LENGTH = 30 * 16000  # 30 seconds at 16kHz
+MAX_LENGTH = 30 * 16000 
 
 def add_noise_to_numpy(audio_data, sample_rate, noise_directory, target_snr_db=None):
     """
@@ -114,7 +99,7 @@ def add_noise_to_numpy(audio_data, sample_rate, noise_directory, target_snr_db=N
     
     # If target SNR is not specified, choose a random value
     if target_snr_db is None:
-        target_snr_db = random.uniform(5, 20)
+        target_snr_db = random.uniform(-20, 20)
     
     # List all audio files in the directory
     noise_files = [f for f in os.listdir(noise_directory) 
@@ -180,7 +165,7 @@ def add_noise_to_numpy(audio_data, sample_rate, noise_directory, target_snr_db=N
     
     return noisy_audio
 
-def load_audio(file_name, add_noise=False, noise_dir=None, target_snr=None):
+def load_audio(file_name, add_noise=False, noise_dir=None):
     file_path = os.path.join(audio_dir, file_name + ".flac")
     try:
         if add_noise and noise_dir:
@@ -188,7 +173,7 @@ def load_audio(file_name, add_noise=False, noise_dir=None, target_snr=None):
             audio_data, sr = sf.read(file_path)
             
             # Add noise to the numpy array with random noise level
-            noisy_audio = add_noise_to_numpy(audio_data, sr, noise_dir, target_snr_db=target_snr)
+            noisy_audio = add_noise_to_numpy(audio_data, sr, noise_dir)
             
             # Convert numpy array back to torch tensor
             speech = torch.tensor(noisy_audio)
@@ -217,13 +202,13 @@ def load_audio(file_name, add_noise=False, noise_dir=None, target_snr=None):
         print(f"Error loading {file_path}: {e}")
         return None 
 
+
 @dataclass
 class DataCollatorSpeechSeq2SeqWithPadding:
     processor: Any
     decoder_start_token_id: int
     add_noise: bool
     noise_dir: str
-    target_snr: int
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
         speeches = []
@@ -236,7 +221,6 @@ class DataCollatorSpeechSeq2SeqWithPadding:
                 feature["filename"], 
                 add_noise=self.add_noise, 
                 noise_dir=self.noise_dir,
-                target_snr=self.target_snr,
             )
             if speech is not None:
                 speeches.append(speech)
@@ -276,67 +260,138 @@ class DataCollatorSpeechSeq2SeqWithPadding:
             "labels": labels
         }
 
-# Initialize data collator with noise options
+
 data_collator = DataCollatorSpeechSeq2SeqWithPadding(
     processor=processor,
     decoder_start_token_id=tokenizer.bos_token_id,
     add_noise=args.add_noise,
     noise_dir=args.noise_dir,
-    target_snr=args.target_snr
 )
 
-# Load dataset
-dataset = load_dataset(args.dataset_name)
-test_dataset = dataset["test"]
-eval_dataloader = DataLoader(test_dataset, batch_size=16, collate_fn=data_collator)
+train_dataloader = DataLoader(
+    train_dataset, 
+    batch_size=args.batch_size, 
+    shuffle=True,
+    collate_fn=data_collator
+)
 
-# Set model to evaluation mode
-model.eval()
+eval_dataloader = DataLoader(
+    test_dataset, 
+    batch_size=args.batch_size,
+    collate_fn=data_collator
+)
 
-# Initialize WER metric
 metric = evaluate.load("wer")
-print(f"Starting evaluation {'with' if args.add_noise else 'without'} noise addition.")
-if args.add_noise:
-    print(f"Using noise from {args.noise_dir} with SNR noise is {args.target_snr}")
 
-# Run evaluation
-for step, batch in enumerate(tqdm(eval_dataloader)):
-    if not batch:  # Skip empty batches (happens if all audio loading failed)
-        continue
-        
-    with torch.no_grad():
-        # Move input features to GPU with correct dtype
-        input_features = batch["input_features"].to("cuda").to(model_dtype)
-        decoder_input_ids = batch["labels"][:, :4].to("cuda")
+quantization_config = BitsAndBytesConfig(
+    load_in_4bit=True,  
+    bnb_4bit_compute_dtype=torch.bfloat16  
+)
 
-        # Generate tokens
-        generated_tokens = (
-            model.generate(
-                input_features=input_features,
-                decoder_input_ids=decoder_input_ids,
-                max_new_tokens=255,
-            )
-            .cpu()
-            .numpy()
-        )
+model = WhisperForConditionalGeneration.from_pretrained(model_id, \
+    quantization_config=quantization_config, device_map="auto")
 
-        # Decode predictions and references
-        labels = batch["labels"].cpu().numpy()
-        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+# Update SpecAugment parameters if enabled
+if args.use_specaugment:
+    print("Enabling SpecAugment with the following parameters:")
+    print(f"  mask_time_prob: {args.mask_time_prob}")
+    print(f"  mask_time_length: {args.mask_time_length}")
+    print(f"  mask_feature_prob: {args.mask_feature_prob}")
+    print(f"  mask_feature_length: {args.mask_feature_length}")
+    
+    # Update the model configuration with SpecAugment settings
+    model.config.apply_spec_augment = True
+    model.config.mask_time_prob = args.mask_time_prob
+    model.config.mask_time_length = args.mask_time_length
+    model.config.mask_feature_prob = args.mask_feature_prob
+    model.config.mask_feature_length = args.mask_feature_length
+    model.config.mask_feature_min_masks = args.mask_feature_min_masks
+    model.config.mask_time_min_masks = args.mask_time_min_masks
+    
+    # Print the updated config for verification
+    print(f"Updated model config: apply_spec_augment={model.config.apply_spec_augment}")
+else:
+    print("Training without SpecAugment")
 
-        # Add batch to WER calculation
-        metric.add_batch(
-            predictions=decoded_preds,
-            references=decoded_labels,
-        )
+model.config.forced_decoder_ids = None
+model.config.suppress_tokens = []
 
-    # Free memory
-    del generated_tokens, labels, batch
-    gc.collect()
+config = LoraConfig(r=64, 
+    lora_alpha=128, 
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", 'fc1', 'fc2'],
+    lora_dropout=0.05, bias="none"
+)
 
-# Calculate and report WER
-wer = 100 * metric.compute()
-print(f"WER: {wer:.2f}%")
-print(f"Evaluation completed {'with' if args.add_noise else 'without'} noise addition.")
+model = get_peft_model(model, config)
+model.print_trainable_parameters()
+
+training_args = Seq2SeqTrainingArguments(
+    output_dir=args.output_dir,  # change to a repo name of your choice
+    per_device_train_batch_size=args.batch_size,
+    gradient_accumulation_steps=16,  # increase by 2x for every 2x decrease in batch size
+    learning_rate=1e-5,
+    warmup_steps=5,
+    num_train_epochs=args.num_epochs,
+    # eval_strategy="epoch",
+    fp16=False,
+    bf16=True,
+    per_device_eval_batch_size=args.batch_size,
+    generation_max_length=128,
+    logging_steps=1,
+    eval_steps=2000,
+    remove_unused_columns=False,  # required as the PeftModel forward doesn't have the signature of the wrapped model's forward
+    label_names=["labels"],  # same reason as above
+)
+
+class SavePeftModelCallback(TrainerCallback):
+    def on_save(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
+    ):
+        checkpoint_folder = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
+
+        peft_model_path = os.path.join(checkpoint_folder, "adapter_model")
+        kwargs["model"].save_pretrained(peft_model_path)
+
+        pytorch_model_path = os.path.join(checkpoint_folder, "pytorch_model.bin")
+        if os.path.exists(pytorch_model_path):
+            os.remove(pytorch_model_path)
+        return control
+
+
+# If you want to use the dataloaders directly instead of datasets:
+trainer = Seq2SeqTrainer(
+    args=training_args,
+    model=model,
+    train_dataset=train_dataset,
+    eval_dataset=test_dataset,
+    data_collator=data_collator,
+    tokenizer=processor.feature_extractor,
+    callbacks=[SavePeftModelCallback],
+)
+
+model.config.use_cache = False 
+
+trainer.train()
+
+model = get_peft_model(model, config)
+# print(model)
+print("Model ID:", model_id) 
+# print("model peft config:", model.peft_config)
+# print("model peft config type: ", model.peft_config["default"].peft_type.value)  # Should print "LORA"
+
+if isinstance(model.peft_config, dict) and "default" in model.peft_config:
+    peft_type = model.peft_config["default"].peft_type.value 
+else:
+    peft_type = "lora" 
+
+augment_suffix = "-specaugment" if args.use_specaugment else ""
+peft_model_id = f"finetuned-lora/{model_id}-{peft_type}{augment_suffix}-noise".replace("/", "-")
+print("peft model id:", peft_model_id) 
+
+model.save_pretrained(peft_model_id)
+
+print(f"Model will be saved at: {peft_model_id}")

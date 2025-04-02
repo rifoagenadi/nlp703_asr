@@ -43,11 +43,12 @@ args = parser.parse_args()
 
 if args.language == "jv":
     language = "javanese"
+    audio_dir = "javanese_data"
 elif args.language == "su":
     language = "sundanese"
+    audio_dir = "sundanese_data"
 else:
     raise ValueError("Invalid language choice. Use 'jv' or 'su'.")
-
 
 peft_model_id = args.peft_model_path
 peft_config = PeftConfig.from_pretrained(peft_model_id)
