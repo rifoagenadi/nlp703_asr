@@ -29,7 +29,7 @@ from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 # Parse arguments
 parser = argparse.ArgumentParser(description="Fine-tune Whisper ASR model on Javanese/Sundanese")
 parser.add_argument("--dataset_name", type=str, required=True, help="Hugging Face dataset name")
-parser.add_argument("--language", type=str, choices=["jv", "su"], required=True, help="Language (jv or su)")
+parser.add_argument("--language", type=str, choices=["jw", "su"], required=True, help="Language (jv or su)")
 parser.add_argument("--model_name", type=str, default="openai/whisper-small", help="Whisper model name")
 parser.add_argument("--task_type", type=str, default="transcribe", help="Task type: transcribe or translate")
 parser.add_argument("--output_dir", type=str, required=True, help="Output directory for fine-tuned model")
@@ -57,13 +57,8 @@ if args.noise_dir and not args.add_noise:
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Load dataset from Hugging Face Hub
-dataset = load_dataset(args.dataset_name)
-train_dataset = dataset["train"]
-test_dataset = dataset["test"]
-
 # Set language-specific parameters
-if args.language == "jv":
+if args.language == "jw":
     audio_dir = "javanese_data"
     language = "javanese"
 elif args.language == "su":
@@ -71,6 +66,11 @@ elif args.language == "su":
     language = "sundanese"
 else:
     raise ValueError("Invalid language choice. Use 'jv' or 'su'.")
+
+# Load dataset from Hugging Face Hub
+dataset = load_dataset(args.dataset_name, language)
+train_dataset = dataset["train"]
+test_dataset = dataset["test"]
 
 model_id = args.model_name
 feature_extractor = WhisperFeatureExtractor.from_pretrained(model_id)
@@ -392,6 +392,6 @@ augment_suffix = "-specaugment" if args.use_specaugment else ""
 peft_model_id = f"finetuned-lora/{model_id}-{peft_type}{augment_suffix}-noise".replace("/", "-")
 print("peft model id:", peft_model_id) 
 
-model.save_pretrained(peft_model_id)
+# model.save_pretrained(peft_model_id)
 
 print(f"Model will be saved at: {peft_model_id}")

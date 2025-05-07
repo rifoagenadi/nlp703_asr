@@ -42,7 +42,7 @@ parser = argparse.ArgumentParser(description="Fine-tune Whisper ASR model on Jav
 parser.add_argument("--peft_model_path", type=str, help="Saved PEFT path", default=None)
 parser.add_argument("--model_id", type=str, default="openai/whisper-small", help="Whisper model name")
 parser.add_argument("--dataset_name", type=str, required=True, help="Hugging Face dataset name")
-parser.add_argument("--language", type=str, choices=["jv", "su"], required=True, help="Language (jv or su)")
+parser.add_argument("--language", type=str, choices=["jw", "su"], required=True, help="Language (jv or su)")
 parser.add_argument("--task_type", type=str, default="transcribe", help="Task type: transcribe or translate")
 parser.add_argument("--noise_dir", type=str, help="Directory containing noise files (.wav) or (.mp3)")
 parser.add_argument("--add_noise", action="store_true", help="Add noise to audio files during evaluation")
@@ -60,7 +60,7 @@ if args.noise_dir and not args.add_noise:
 if args.target_snr is not None and not args.add_noise:
     print("Warning: --target_snr is specified but --add_noise is not enabled. SNR value will be ignored.")
 
-if args.language == "jv":
+if args.language == "jw":
     audio_dir = "javanese_data"
     language = "javanese"
 elif args.language == "su":
@@ -286,7 +286,7 @@ data_collator = DataCollatorSpeechSeq2SeqWithPadding(
 )
 
 # Load dataset
-dataset = load_dataset(args.dataset_name)
+dataset = load_dataset(args.dataset_name, language)
 test_dataset = dataset["test"]
 eval_dataloader = DataLoader(test_dataset, batch_size=16, collate_fn=data_collator)
 

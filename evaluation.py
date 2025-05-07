@@ -33,7 +33,7 @@ parser = argparse.ArgumentParser(description="Fine-tune Whisper ASR model on Jav
 parser.add_argument("--peft_model_path", type=str, help="Saved PEFT path")
 parser.add_argument("--model_id", type=str, default="openai/whisper-small", help="Whisper model name")
 parser.add_argument("--dataset_name", type=str, required=True, help="Hugging Face dataset name")
-parser.add_argument("--language", type=str, choices=["jv", "su"], required=True, help="Language (jv or su)")
+parser.add_argument("--language", type=str, choices=["jw", "su"], required=True, help="Language (jw or su)")
 parser.add_argument("--task_type", type=str, default="transcribe", help="Task type: transcribe or translate")
 
 args = parser.parse_args()
@@ -41,14 +41,14 @@ args = parser.parse_args()
 # args --> peft_model_path "test-openai-whisper-tiny-LORA"
 # args --> model_id "openai/whisper-tiny"
 
-if args.language == "jv":
+if args.language == "jw":
     language = "javanese"
-    audio_dir = "javanese_data"
+    audio_dir = "/l/users/salsabila.pranida/rw-converted/javanese"
 elif args.language == "su":
     language = "sundanese"
-    audio_dir = "sundanese_data"
+    audio_dir = "/l/users/salsabila.pranida/rw-converted/sundanese"
 else:
-    raise ValueError("Invalid language choice. Use 'jv' or 'su'.")
+    raise ValueError("Invalid language choice. Use 'jw' or 'su'.")
 
 peft_model_id = args.peft_model_path
 peft_config = PeftConfig.from_pretrained(peft_model_id)
@@ -67,6 +67,8 @@ if hasattr(model, "base_model"):
     model.base_model.to("cuda")
 
 MAX_LENGTH = 30 * 16000 
+
+failed_files = []
 
 def load_audio(file_name):
     file_path = os.path.join(audio_dir, file_name + ".flac")
@@ -88,6 +90,8 @@ def load_audio(file_name):
         return speech
     except Exception as e:
         print(f"Error loading {file_path}: {e}")
+        failed_files.append(file_path)  # Track the bad file
+
         return None 
 
 @dataclass
@@ -138,7 +142,8 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         # Return a dictionary containing 'input_features' and 'labels'
         return {
             "input_features": inputs.input_features,
-            "labels": labels
+            "labels": labels,
+            "filenames": valid_features
         }
 
 data_collator = DataCollatorSpeechSeq2SeqWithPadding(
@@ -146,13 +151,18 @@ data_collator = DataCollatorSpeechSeq2SeqWithPadding(
     decoder_start_token_id=tokenizer.bos_token_id
 )
 
-dataset = load_dataset(args.dataset_name)
+dataset = load_dataset(args.dataset_name, language)
 test_dataset = dataset["test"]
+print("Test dataset size:", len(test_dataset))
+
 eval_dataloader = DataLoader(test_dataset, batch_size=16, collate_fn=data_collator)
 
 model.eval()
 
 metric = evaluate.load("wer")
+
+transcripts = []
+
 for step, batch in enumerate(tqdm(eval_dataloader)):
     with torch.no_grad():  # No need for autocast since Whisper already handles mixed precision
         # Ensure correct dtype for input_features
@@ -174,6 +184,9 @@ for step, batch in enumerate(tqdm(eval_dataloader)):
         decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
+        for feature, pred in zip(batch["filenames"], decoded_preds):
+            transcripts.append((feature["filename"], pred.strip()))
+
         metric.add_batch(
             predictions=decoded_preds,
             references=decoded_labels,
@@ -184,3 +197,19 @@ for step, batch in enumerate(tqdm(eval_dataloader)):
 
 wer = 100 * metric.compute()
 print(f"{wer=}")
+
+output_file = f"transcripts_{args.language}.txt"
+with open(output_file, "w", encoding="utf-8") as f:
+    f.write("filename,text\n")
+    for fname, pred in transcripts:
+        f.write(f"{fname},{pred}\n")
+
+print(f"✅ Transcripts saved to: {output_file}")
+
+# Print failed audio files, if any
+if failed_files:
+    print("\n⚠️ The following audio files failed to load:")
+    for file in failed_files:
+        print(" -", file)
+else:
+    print("\n✅ All audio files loaded successfully!")
